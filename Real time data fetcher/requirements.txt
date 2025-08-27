@@ -1,0 +1,5 @@
+requests
+feedparser
+pandas
+python-dotenv
+tweepy
