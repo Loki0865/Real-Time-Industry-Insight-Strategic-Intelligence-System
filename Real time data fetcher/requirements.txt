@@ -1,5 +1,7 @@
-requests
-feedparser
-pandas
-python-dotenv
-tweepy
+requests>=2.31.0
+feedparser>=6.0.10
+pandas>=2.0.0
+python-dotenv>=1.0.0
+tweepy>=4.14.0
+google-generativeai>=0.3.0
+tqdm>=4.65.0
