@@ -2,4 +2,10 @@ requests
 feedparser
 pandas
 python-dotenv
-tweepy
+google-generativeai
+tqdm
+matplotlib
+prophet
+scipy
+textblob
+schedule

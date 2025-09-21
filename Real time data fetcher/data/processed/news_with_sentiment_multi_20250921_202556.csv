@@ -1,0 +1,31 @@
+keyword,date,sentiment_score,articles_count
+Artificial Intelligence,2025-08-27,-0.6,1
+Artificial Intelligence,2025-08-28,-0.5,1
+Artificial Intelligence,2025-08-31,0.0,1
+Artificial Intelligence,2025-09-02,-0.7,1
+Artificial Intelligence,2025-09-03,0.0,1
+Artificial Intelligence,2025-09-08,0.6,1
+Artificial Intelligence,2025-09-11,0.0,1
+Artificial Intelligence,2025-09-12,0.0,2
+Market,2025-08-23,0.8,1
+Market,2025-08-25,-0.6,1
+Market,2025-08-27,-0.35,2
+Market,2025-09-07,-0.4,1
+Market,2025-09-10,0.0,1
+Market,2025-09-15,0.6,1
+Market,2025-09-19,-0.5,1
+Technology,2025-08-22,0.0,1
+Technology,2025-08-30,0.8,1
+Technology,2025-08-31,0.1,1
+Technology,2025-09-03,0.7,1
+Technology,2025-09-04,0.0,1
+Technology,2025-09-05,0.7,1
+Technology,2025-09-09,0.6,1
+Technology,2025-09-11,0.0,1
+Technology,2025-09-19,-0.7,1
+Trending,2025-09-02,0.0,1
+Trending,2025-09-10,0.5,3
+Trending,2025-09-12,-0.8,1
+Trending,2025-09-14,0.6,1
+Trending,2025-09-15,0.0,1
+Trending,2025-09-18,0.8,1

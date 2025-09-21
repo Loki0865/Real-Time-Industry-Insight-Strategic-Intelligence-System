@@ -10,6 +10,8 @@ import google.generativeai as genai
 from tqdm import tqdm
 from urllib.parse import quote
 import json
+import time
+import requests as http
 
 # --------------------------
 # Load API Keys
@@ -17,9 +19,53 @@ import json
 load_dotenv()
 NEWS_API_KEY = os.getenv("NEWS_API_KEY")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL")
 
-genai.configure(api_key=GOOGLE_API_KEY)
-gemini_model = genai.GenerativeModel("gemini-1.5-flash")
+# Configure Gemini only if key is present
+gemini_model = None
+if GOOGLE_API_KEY:
+    try:
+        genai.configure(api_key=GOOGLE_API_KEY)
+        gemini_model = genai.GenerativeModel("gemini-1.5-flash")
+    except Exception as e:
+        print(f"⚠️ Gemini configuration failed, falling back to neutral sentiment: {e}")
+
+# Quota alert guard to avoid spamming
+QUOTA_ALERT_SENT = False
+
+def _write_quota_status(exceeded: bool, retry_seconds: int | None = None, detail: str | None = None):
+    try:
+        os.makedirs("data/processed", exist_ok=True)
+        status_path = "data/processed/gemini_quota_status.json"
+        payload = {
+            "timestamp": int(time.time()),
+            "exceeded": bool(exceeded),
+            "retry_seconds": int(retry_seconds) if retry_seconds is not None else None,
+            "detail": detail or ""
+        }
+        with open(status_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f)
+    except Exception as e:
+        print(f"⚠️ Could not write quota status: {e}")
+
+def _notify_quota_exceeded(detail: str, retry_seconds: int | None = None):
+    global QUOTA_ALERT_SENT
+    if QUOTA_ALERT_SENT:
+        return
+    QUOTA_ALERT_SENT = True
+    # Console
+    retry_msg = f" Retry in ~{retry_seconds}s." if retry_seconds else ""
+    print(f"🚫 Gemini quota exceeded.{retry_msg}")
+    # Slack
+    if SLACK_WEBHOOK_URL:
+        try:
+            http.post(SLACK_WEBHOOK_URL, json={
+                "text": f"[Gemini] Quota exceeded.{retry_msg}\n{detail[:500]}"
+            })
+        except Exception as e:
+            print(f"⚠️ Slack notify failed: {e}")
+    # File status
+    _write_quota_status(True, retry_seconds, detail)
 
 # --------------------------
 # Cleaning Function
@@ -50,35 +96,43 @@ def clean_text(text: str) -> str:
 # Fetch News from NewsAPI
 # --------------------------
 def fetch_news(query="AI", language="en", page_size=10):
-    url = "https://newsapi.org/v2/everything"
-    params = {
-        "q": query,
-        "language": language,
-        "pageSize": page_size,
-        "apiKey": NEWS_API_KEY
-    }
-    response = requests.get(url, params=params)
-    response.raise_for_status()
-    articles = response.json().get("articles", [])
-    data = []
-    for art in articles:
-        data.append({
-            "title": art.get("title"),
-            "description": art.get("description"),
-            "content": art.get("content"),
-            "publishedAt": art.get("publishedAt"),
-            "url": art.get("url"),
-            "source": art.get("source", {}).get("name", ""),
-            "topic": query
-        })
-    return pd.DataFrame(data)
+    # If NEWS_API_KEY is missing, return empty DataFrame gracefully
+    if not NEWS_API_KEY:
+        return pd.DataFrame(columns=["title", "description", "content", "publishedAt", "url", "source", "topic"])
+    try:
+        url = "https://newsapi.org/v2/everything"
+        params = {
+            "q": query,
+            "language": language,
+            "pageSize": page_size,
+            "apiKey": NEWS_API_KEY
+        }
+        response = requests.get(url, params=params, timeout=20)
+        response.raise_for_status()
+        articles = response.json().get("articles", [])
+        data = []
+        for art in articles:
+            data.append({
+                "title": art.get("title"),
+                "description": art.get("description"),
+                "content": art.get("content"),
+                "publishedAt": art.get("publishedAt"),
+                "url": art.get("url"),
+                "source": art.get("source", {}).get("name", ""),
+                "topic": query
+            })
+        return pd.DataFrame(data)
+    except Exception as e:
+        print(f"⚠️ NewsAPI fetch failed for query '{query}': {e}")
+        return pd.DataFrame(columns=["title", "description", "content", "publishedAt", "url", "source", "topic"])
 
 # --------------------------
 # Fetch Google News RSS
 # --------------------------
-def fetch_google_news(query="AI", language="en", max_articles=5):
+def fetch_google_news(query="AI", language="en", max_articles=10):
     query_encoded = quote(query)
-    rss_url = f"https://news.google.com/rss/search?q={query_encoded}&hl={language}-US&gl=US&ceid=US:{language.upper()}"
+    # Add recent news parameters to get fresher articles
+    rss_url = f"https://news.google.com/rss/search?q={query_encoded}&hl={language}-US&gl=US&ceid=US:{language.upper()}&when:1d"
     feed = feedparser.parse(rss_url)
     articles = []
     for entry in feed.entries[:max_articles]:
@@ -86,7 +140,7 @@ def fetch_google_news(query="AI", language="en", max_articles=5):
             "title": entry.get("title"),
             "description": entry.get("summary"),
             "content": "",
-            "publishedAt": entry.get("published", ""),
+            "publishedAt": entry.get("published", ""),  # unify name
             "url": entry.get("link"),
             "source": entry.get("source", {}).get("title", ""),
             "topic": query
@@ -98,10 +152,13 @@ def fetch_google_news(query="AI", language="en", max_articles=5):
 # --------------------------
 def classify_sentiments_batch(texts, batch_size=10):
     results = []
+    # Fallback: if Gemini is not configured, return neutral scores
+    if gemini_model is None:
+        _write_quota_status(False, None, "Gemini not configured; using neutral fallback")
+        return [("Neutral", 0.0) for _ in texts]
     for i in tqdm(range(0, len(texts), batch_size), desc="Classifying Sentiment (batched)"):
         batch = texts[i:i+batch_size]
 
-        # Prepare prompt
         joined = "\n".join([f"{j+1}. {t}" for j, t in enumerate(batch)])
         prompt = f"""
         Analyze the sentiment for the following {len(batch)} texts.
@@ -123,15 +180,12 @@ def classify_sentiments_batch(texts, batch_size=10):
         try:
             response = gemini_model.generate_content(prompt)
             raw = response.text.strip()
-
-            # Extract JSON
             match = re.search(r'\[.*\]', raw, re.S)
             if not match:
                 results.extend([("Neutral", 0.0)] * len(batch))
                 continue
 
             parsed = json.loads(match.group())
-
             for item in parsed:
                 label = item.get("label", "Neutral").capitalize()
                 score = float(item.get("score", 0.0))
@@ -142,7 +196,19 @@ def classify_sentiments_batch(texts, batch_size=10):
                 results.append((label, score))
 
         except Exception as e:
-            print(f"⚠️ Batch sentiment failed: {e}")
+            err_text = str(e)
+            # Detect quota exceeded patterns and parse retry seconds if present
+            retry_seconds = None
+            m = re.search(r"retry_delay\s*\{\s*seconds:\s*(\d+)", err_text)
+            if m:
+                try:
+                    retry_seconds = int(m.group(1))
+                except Exception:
+                    retry_seconds = None
+            if ("quota" in err_text.lower()) or ("429" in err_text):
+                _notify_quota_exceeded(err_text, retry_seconds)
+            else:
+                print(f"⚠️ Batch sentiment failed: {e}")
             results.extend([("Neutral", 0.0)] * len(batch))
 
     return results
@@ -150,38 +216,62 @@ def classify_sentiments_batch(texts, batch_size=10):
 # --------------------------
 # Main Pipeline
 # --------------------------
-def run_pipeline(topics=None):
+def run_pipeline(topics=None, aggregate=True):
+    """
+    Fetches news, classifies sentiment and (optionally) aggregates per day+topic.
+    Returns the processed DataFrame.
+    """
     if topics is None:
         topics = ["Artificial Intelligence", "Technology", "Trending", "Market"]
 
     all_dfs = []
-
     for topic in topics:
         print(f"Fetching news for topic: {topic}")
         df_newsapi = fetch_news(topic)
         df_google = fetch_google_news(topic)
-        df = pd.concat([df_newsapi, df_google], ignore_index=True)
+        # Concatenate only non-empty frames
+        frames = [d for d in [df_newsapi, df_google] if d is not None and not d.empty]
+        if len(frames) == 0:
+            continue
+        df = pd.concat(frames, ignore_index=True)
+        df["topic"] = topic  # ensure topic field
         all_dfs.append(df)
+
+    if not all_dfs:
+        print("⚠️ No articles found for any topic.")
+        return None
 
     df_all = pd.concat(all_dfs, ignore_index=True)
 
     if df_all.empty:
         print("⚠️ No articles found for any topic.")
-        return
+        return None
 
     # Deduplicate
     df_all.drop_duplicates(subset=["title", "url"], inplace=True)
 
-    # Save raw
+    # Normalise date column - ensure we get today's date properly
+    df_all["date"] = pd.to_datetime(df_all["publishedAt"], errors="coerce").dt.tz_localize(None).dt.date
+    
+    # Filter out any articles older than 7 days to ensure fresh data
+    today = pd.Timestamp.now().date()
+    seven_days_ago = today - pd.Timedelta(days=7)
+    df_all = df_all[df_all["date"] >= seven_days_ago]
+    
+    print(f"📅 Date range in fetched data: {df_all['date'].min()} to {df_all['date'].max()}")
+    print(f"📅 Today's date: {today}")
+
+    # Save raw (full fields)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    raw_path = f"data/raw/news_multi_{timestamp}.csv"
     os.makedirs("data/raw", exist_ok=True)
+    raw_path = f"data/raw/news_multi_{timestamp}.csv"
     df_all.to_csv(raw_path, index=False)
     print(f"✅ Raw data saved to {raw_path}")
 
     # Clean text
-    df_all["clean_text"] = df_all["title"].fillna("") + " " + df_all["description"].fillna("")
-    df_all["clean_text"] = df_all["clean_text"].apply(clean_text)
+    df_all["clean_text"] = (
+        df_all["title"].fillna("") + " " + df_all["description"].fillna("")
+    ).apply(clean_text)
 
     # Batch classify sentiment
     sentiments = classify_sentiments_batch(df_all["clean_text"].tolist(), batch_size=10)
@@ -189,15 +279,27 @@ def run_pipeline(topics=None):
     df_all["sentiment_gemini"] = labels
     df_all["sentiment_score"] = scores
 
-    # Save processed
+    # Save per-article sentiment-enriched CSV
     os.makedirs("data/processed", exist_ok=True)
-    final_path = f"data/processed/news_with_sentiment_multi_{timestamp}.csv"
-    df_all.to_csv(final_path, index=False)
-    print(f"✅ Final dataset with sentiment saved to {final_path}")
+    articles_path = f"data/processed/articles_with_sentiment_{timestamp}.csv"
+    df_all.to_csv(articles_path, index=False)
+    print(f"✅ Articles with sentiment saved to {articles_path}")
 
-# --------------------------
-# Run Script
-# --------------------------
-if __name__ == "__main__":
-    topics_to_fetch = ["Artificial Intelligence", "Technology", "Trending", "Market", "AI Trends"]
-    run_pipeline(topics_to_fetch)
+    # Aggregate per topic+date if requested
+    if aggregate:
+        trend_df = (
+            df_all.groupby(["topic", "date"])
+            .agg(sentiment_score=("sentiment_score", "mean"),
+                 articles_count=("sentiment_score", "count"))
+            .reset_index()
+            .rename(columns={"topic": "keyword"})
+        )
+        # Save processed aggregated
+        os.makedirs("data/processed", exist_ok=True)
+        final_path = f"data/processed/news_with_sentiment_multi_{timestamp}.csv"
+        trend_df.to_csv(final_path, index=False)
+        print(f"✅ Final dataset with sentiment saved to {final_path}")
+        return trend_df
+
+    # else return raw-level DataFrame
+    return df_all
