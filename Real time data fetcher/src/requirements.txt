@@ -1,0 +1,14 @@
+requests
+feedparser
+pandas
+python-dotenv
+google-generativeai
+tqdm
+matplotlib
+prophet
+scipy
+textblob
+schedule
+streamlit
+numpy
+plotly
