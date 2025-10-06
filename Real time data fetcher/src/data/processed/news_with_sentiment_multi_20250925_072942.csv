@@ -1,0 +1,7 @@
+keyword,date,sentiment_score,articles_count
+Market,2025-09-18,-0.6,1
+Market,2025-09-19,-0.5,1
+Technology,2025-09-19,-0.7,1
+Technology,2025-09-23,0.0,1
+Trending,2025-09-18,0.8,1
+Trending,2025-09-23,0.6,1
