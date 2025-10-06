@@ -9,3 +9,6 @@ prophet
 scipy
 textblob
 schedule
+streamlit
+numpy
+plotly
