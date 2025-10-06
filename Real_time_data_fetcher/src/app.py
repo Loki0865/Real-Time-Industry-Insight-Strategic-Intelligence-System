@@ -81,10 +81,18 @@ tab1, tab2, tab3 = st.tabs(["📊 Live News & Insights", "📈 Forecast Dashboar
 with tab1:
     st.markdown('<h2 class="tab-header">Fetch Latest News & Sentiment</h2>', unsafe_allow_html=True)
     
-    api_key = st.text_input("🔑 Enter your NewsAPI Key", type="password", help="Get free key from newsapi.org")
-    if api_key:
-        os.environ["NEWS_API_KEY"] = api_key  # Override env
-        st.session_state.api_key = api_key
+    # API Keys input section
+    col_key1, col_key2 = st.columns(2)
+    with col_key1:
+        api_key = st.text_input("🔑 Enter your NewsAPI Key", type="password", help="Get free key from newsapi.org")
+        if api_key:
+            os.environ["NEWS_API_KEY"] = api_key  # Override env
+            st.session_state.api_key = api_key
+    with col_key2:
+        gemini_key = st.text_input("🔑 Enter your Gemini API Key", type="password", help="Get key from Google AI Studio")
+        if gemini_key:
+            os.environ["GEMINI_API_KEY"] = gemini_key  # Override env
+            st.session_state.gemini_key = gemini_key
     
     keywords_input = st.text_area("📝 Enter keywords (comma-separated)", 
                                   value="Artificial Intelligence,Machine Learning,Deep Learning,Neural Networks,NLP,Generative AI,Computer Vision,Ethics,Chatbots,Robotics",
@@ -98,7 +106,7 @@ with tab1:
     col_btn = st.columns([3, 1, 3])
     with col_btn[1]:
         if st.button("🚀 Fetch News", type="primary", use_container_width=True):
-            if 'api_key' in st.session_state:
+            if 'api_key' in st.session_state and 'gemini_key' in st.session_state:
                 with st.spinner("Fetching and analyzing news..."):
                     raw, trend = load_or_fetch_data(keywords, pages_to_fetch, articles_per_page)
                     st.session_state.raw_articles = raw
@@ -115,7 +123,7 @@ with tab1:
                         csv_raw = raw.to_csv(index=False).encode('utf-8')
                         st.download_button("📄 Download Raw Fetched Articles CSV", data=csv_raw, file_name='raw_articles.csv', mime='text/csv', use_container_width=True)
             else:
-                st.error("⚠️ Please enter your NewsAPI key.")
+                st.error("⚠️ Please enter both your NewsAPI and Gemini API keys.")
     
     if not st.session_state.raw_articles.empty:
         # Metrics (NaN fix)
